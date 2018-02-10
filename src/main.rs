@@ -17,7 +17,8 @@ pub enum Statement {
     },
     Number(f32),
     Token(char),
-    StatList(Vec<Box<Statement>>)
+    StatList(Vec<Box<Statement>>),
+    Negate(Box<Statement>)
 }
 
 macro_rules! or {
@@ -28,12 +29,15 @@ macro_rules! or {
 
                 if result.is_some() {
                     lexer.accept();
+                    println!("Or accepted {:?}\n\twith lexer {:?}\n\tand func {:?}", result, lexer, stringify!($parse_funcs));
                     return result
                 } else {
-                    lexer.reject()
+                    lexer.reject();
+                    println!("Or didn't accept {:?}\n\twith lexer {:?}\n\tand func {:?}", result, lexer, stringify!($parse_funcs));
                 }
             )+;
 
+            println!("Or failed {:?}", result);
             None
         }
     }
@@ -43,8 +47,12 @@ macro_rules! and {
     [($($parse_funcs: expr),+) => $nandler_func: expr] => {
         |lexer: &mut lexer::Lexer| -> Option<Box<Statement>> {
             let results = ($(match $parse_funcs(lexer) {
-                Some(statement) => statement,
+                Some(statement) => {
+                    println!("And accepted {:?}\n\twith lexer {:?}\n\tand func {:?}", statement, lexer, stringify!($parse_funcs));
+                    statement
+                }
                 _ => {
+                    println!("And didn't accept rule\n\twith lexer {:?}\n\tand func {:?}", lexer, stringify!($parse_funcs));
                     lexer.reject();
                     return None
                 }
@@ -52,10 +60,12 @@ macro_rules! and {
 
             match std::ops::Fn::call(&$nandler_func, results) {
                 statement @ Some(_) => {
+                    println!("And handling function successfully handled statement and returned {:?}", statement);
                     lexer.accept();
                     statement
                 }
                 _ => {
+                    println!("And handling function failed to process statements");
                     lexer.reject();
                     return None
                 }
@@ -67,23 +77,27 @@ macro_rules! and {
 macro_rules! rule {
     ($name: ident, $parse_func:expr) => {
         fn $name(lexer: &mut lexer::Lexer) -> Option<Box<Statement>> {
+            println!("Executing rule {:?}", stringify!($name));
+
             $parse_func(lexer)
         }
     };
 }
 
 fn num(lexer: &mut lexer::Lexer) -> Option<Box<Statement>> {
+    println!("num {:?}", lexer);
     let result = lexer
         .next()
         .map(|c| c as char)
-        .and_then(|c|
+        .and_then(|c| {
+                println!("----- NUMERIC {}", c);
                   if c.is_numeric() {
                       lexer.accept();
                       Some(Box::new(Statement::Number(c.to_string().parse::<f32>().unwrap())))
                   } else {
                       lexer.reject();
                       None
-                  });
+                  }});
 
     result
 }
@@ -103,51 +117,45 @@ fn token(token_char: char) -> impl FnMut(&mut lexer::Lexer) -> Option<Box<Statem
     }
 }
 
-fn rearrange_operator(lstatement: Box<Statement>, rstatements: Box<Statement>) -> Option<Box<Statement>> {
-    match *rstatements {
-        Statement::StatList(mut list) => Some(Box::new(Statement::StatList(vec![
-                Box::new(Statement::Operator{
-                    op: list.pop().unwrap(),
-                    left: lstatement,
-                    right: list.pop().unwrap()
-                }),
-                list.pop().unwrap()
-            ]))),
-        _ => panic!("Got not a statement list in a rule")
-    }
+fn make_operator(left: Box<Statement>, op: Box<Statement>, right: Box<Statement>) -> Option<Box<Statement>> {
+    Some(Box::new(Statement::Operator{
+        op,
+        left,
+        right
+    }))
 }
 
-fn make_statlist(stat1: Box<Statement>, stat2: Box<Statement>, stat3: Box<Statement>) -> Option<Box<Statement>> {
-     Some(Box::new(Statement::StatList(vec![stat1, stat2, stat3])))
+fn negate(_neg_token: Box<Statement>, number: Box<Statement>) -> Option<Box<Statement>> {
+    Some(Box::new(Statement::Negate(number)))
 }
 
-// expr = term, expr1;
-// expr1 = "+",term,expr1 | "-",term,expr1;
-// term = factor, term1;
-// term1 = "*", factor, term1 | "/", factor, term1;
-// factor = "(", expr , ")" | number;
-// syntax = expr;
+// expr = sum
+// sum = mul "+" sum | mul "-" sum | mul
+// mul = atom "*" mul | atom "/" mul | atom
+// atom = "(", expr , ")" | number | neg;
+// neg = "-" atom
 
-rule!(expr, and![(term, expr1) => rearrange_operator]);
+rule!(expr, sum);
 
-rule!(expr1, or![
-     and![(token('+'), term, expr1) => make_statlist],
-     and![(token('-'), term, expr1) => make_statlist]
+rule!(sum, or![
+     and![(mul, token('+'), sum) => make_operator],
+     and![(mul, token('-'), sum) => make_operator],
+     mul
 ]);
 
-rule!(term, and![(factor, term1) => rearrange_operator]);
-
-rule!(term1, or![
-    and![(token('*'), factor, term1) => make_statlist],
-    and![(token('/'), factor, term1) => make_statlist]
+rule!(mul, or![
+     and![(atom, token('*'), mul) => make_operator],
+     and![(atom, token('/'), mul) => make_operator],
+     atom
 ]);
 
-rule!(factor, or![
+rule!(atom, or![
     and![(token('('), expr, token(')')) => |_lbrace, stat, _rbrace| Some(stat)],
-    num
+    num,
+    neg
 ]);
 
-rule!(syntax, expr);
+rule!(neg, and![(token('-'), atom) => negate]);
 
 const STRING1: &str = "1 + 2";
 const STRING2: &str = "(1 + 2)";
@@ -157,10 +165,14 @@ const STRING5: &str = "(1 * 2) + (3 * 4)";
 const STRING6: &str = "((1 * 2) + (3 + 4))";
 
 fn main() {
-    println!("0. Result {:?}", syntax(&mut lexer::Lexer::new(STRING1)));
-    println!("1. Result {:?}", syntax(&mut lexer::Lexer::new(STRING2)));
-    println!("2. Result {:?}", syntax(&mut lexer::Lexer::new(STRING3)));
-    println!("3. Result {:?}", syntax(&mut lexer::Lexer::new(STRING4)));
-    println!("4. Result {:?}", syntax(&mut lexer::Lexer::new(STRING5)));
-    println!("5. Result {:?}", syntax(&mut lexer::Lexer::new(STRING6)));
+    // let ref mut lex = lexer::Lexer::new("( ");
+    // //rule!(test, and!(token('+'), token('(')));
+    // println!("{:?}", test(lex));
+
+    println!("0. Result {:?}", expr(&mut lexer::Lexer::new(STRING1)));
+    // println!("1. Result {:?}", syntax(&mut lexer::Lexer::new(STRING2)));
+    // println!("2. Result {:?}", syntax(&mut lexer::Lexer::new(STRING3)));
+    // println!("3. Result {:?}", syntax(&mut lexer::Lexer::new(STRING4)));
+    // println!("4. Result {:?}", syntax(&mut lexer::Lexer::new(STRING5)));
+    // println!("5. Result {:?}", syntax(&mut lexer::Lexer::new(STRING6)));
 }
