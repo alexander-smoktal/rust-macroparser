@@ -60,9 +60,9 @@ impl Statement for Token {
     }
 }
 
-macro_rules! rule {
-    ($name: ident, or[$($parse_funcs: expr), +]) => {
-        fn $name(lexer: &mut lexer::Lexer) -> Option<Box<Statement>> {
+macro_rules! or {
+    ($($parse_funcs: expr), +) => {
+        |lexer: &mut lexer::Lexer| -> Option<Box<Statement>> {
             $(
                 let result = $parse_funcs(lexer);
 
@@ -76,19 +76,36 @@ macro_rules! rule {
 
             None
         }
-    };
-    ($name: ident, and[$($parse_funcs: expr), +] => $nandler_func: expr) => {
-        fn $name(lexer: &mut lexer::Lexer) -> Option<Box<Statement>> {
+    }
+}
+
+macro_rules! and {
+    (($($parse_funcs: expr),+) => $nandler_func: expr) => {
+        |lexer: &mut lexer::Lexer| -> Option<Box<Statement>> {
             let results = ($(match $parse_funcs(lexer) {
                 Some(statement) => statement,
-                _ => return None
+                _ => {
+                    lexer.reject();
+                    return None
+                }
             }), +);
-            
-            std::ops::Fn::call(&$nandler_func, results)
+
+            match std::ops::Fn::call(&$nandler_func, results) {
+                statement @ Some(_) => statement,
+                _ => {
+                    lexer.reject();
+                    return None
+                }
+            }
         }
     };
+}
+
+macro_rules! rule {
     ($name: ident, $parse_func:expr) => {
-        rule!($name, or[$parse_func])
+        fn $name(lexer: &mut lexer::Lexer) -> Option<Box<Statement>> {
+            $parse_func(lexer)
+        }
     };
 }
 
@@ -112,8 +129,10 @@ fn token(token_char: char) -> impl FnMut(&mut lexer::Lexer) -> Option<Box<Statem
         .next()
         .map(|c| c as char).and_then(|c| 
             if c == token_char {
+                lexer.accept();
                 Some(Box::new(Token(c)) as Box<Statement>) 
             } else {
+                lexer.reject();
                 None
             })
     }
@@ -142,7 +161,7 @@ fn sum_expr(left_num: Box<Statement>, sign: Box<Statement>, right_num: Box<State
 // const STRING3: &str = "(1 + 2) + 3";
 // const STRING4: &str = "1 + (2 + 3)";
 // const STRING5: &str = "(1 + 2) + (3 + 4)";
-const STRING6: &str = "((1 + 2) + (3 + 4))";
+const STRING6: &str = "((1 * 2) + (3 + 4))";
 
 fn main() {
     let ref mut lex = lexer::Lexer::new(STRING6);
@@ -150,8 +169,8 @@ fn main() {
     rule!(space, token(' '));
     rule!(lbrace, token('('));
     rule!(plus, token('+'));
-    rule!(test, or[token('+'), token('(')]);
-    rule!(test_and, and[parse_num, token('+'), parse_num] => sum_expr);
+    rule!(test, or!(token('+'), token('(')));
+    rule!(test_and, and!((parse_num, or!(token('+'), token('-'), token('*'), token('/')), parse_num) => sum_expr));
 
     println!("ZPT0: {:?}", space(lex));
     println!("ZPT1: {:?}", lbrace(lex));
