@@ -1,2 +1,3 @@
-# rust-experiments
-Some experiments with Rust(c)
+# Rust macroparser
+
+Macro-based LL(*) parser
