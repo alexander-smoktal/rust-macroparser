@@ -1,50 +1,42 @@
-use std::vec::IntoIter;
-
 #[derive(Debug)]
 pub struct Lexer {
     /// Input string
-    input: IntoIter<u8>,
-    /// Parsed characters, if parsed, but not accepted
-    parsed: Vec<u8>,
-    /// Currently popped chars
-    backpack: Vec<u8>
+    input: Vec<char>,
+    /// Input position
+    position: usize
 }
+
+type Position = usize;
 
 impl Lexer {
     pub fn new(input: &str) -> Self {
+        // Compiler bug. Can't drain string inplace
+        let mut string = String::from(input);
+        let vec = string.drain(..).collect();
+
         Lexer {
-            input: Vec::from(input).into_iter(),
-            parsed: vec![],
-            backpack: vec![]
+            input: vec,
+            position: 0
         }
     }
 
-    pub fn next(&mut self) -> Option<u8> {
-        let result: Option<u8>;
-        
-        if self.parsed.len() > 0 {
-            result = self.parsed.pop()
-        } else {
-            result = self.input.next()
-        }
+    pub fn position(&self) -> Position {
+        self.position
+    }
 
-        if let Some(c) = result {
-            if c == ' ' as u8 {
-                return self.next()
+    pub fn next(&mut self) -> Option<char> {
+        while let Some(result) = self.input.get(self.position).cloned() {
+            self.position += 1;
+
+            if result != ' ' {
+                return Some(result)
             }
-            
-            self.backpack.push(c)
         }
-
-        result
+        
+        None
     }
 
-    pub fn accept(&mut self) {
-        self.backpack.clear()
-    }
-
-    pub fn reject(&mut self) {
-        self.parsed.append(&mut self.backpack);
-        self.backpack.clear()
+    pub fn rollback(&mut self, position: Position) {
+        self.position = position
     }
 }
