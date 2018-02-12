@@ -5,6 +5,11 @@
 
 //trace_macros!(true);
 
+mod lexer;
+mod expression;
+
+use std::boxed::Box;
+
 const DEBUG: bool = false;
 
 macro_rules! debug_parser {
@@ -15,53 +20,23 @@ macro_rules! debug_parser {
     };
 }
 
-mod lexer;
-
-use std::boxed::Box;
-
-#[derive(Debug)]
-pub enum Expression {
-    Operator {
-        op: Box<Expression>,
-        left: Box<Expression>,
-        right: Box<Expression>
-    },
-    Number(f32),
-    Token(char),
-    Negate(Box<Expression>)
-}
-
-impl Expression {
-    pub fn eval(self) -> f32 {
-        match self {
-            Expression::Operator { op: box Expression::Token('+'), left, right } => left.eval() + right.eval(),
-            Expression::Operator { op: box Expression::Token('-'), left, right } => left.eval() - right.eval(),
-            Expression::Operator { op: box Expression::Token('/'), left, right } => left.eval() / right.eval(),
-            Expression::Operator { op: box Expression::Token('*'), left, right } => left.eval() * right.eval(),
-            Expression::Number(val) => val,
-            Expression::Negate(exp) => -exp.eval(),
-            token => panic!("Got token insode expression {:?}", token)
-        }
-    }
-}
-
 macro_rules! or {
     [$($parse_funcs: expr),+] => {
-        |lexer: &mut lexer::Lexer| -> Option<Box<Expression>> {
+        |lexer: &mut lexer::Lexer| -> Option<Box<expression::Expression>> {
             $(
                 let parser_pos = lexer.position();
                 let result = $parse_funcs(lexer);
 
                 if result.is_some() {
-                    debug_parser!("Or accepted {:?}\n\twith lexer {:?}\n\tand func {:?}", result, lexer, stringify!($parse_funcs));
+                    debug_parser!("Or statement rule {} accepted expression {:?}. Lexer state {:?}", stringify!($parse_funcs), result, lexer);
                     return result
                 } else {
                     lexer.rollback(parser_pos);
-                    debug_parser!("Or rejected rule for lexer {:?}\n\tand func {:?}", lexer, stringify!($parse_funcs));
+                    debug_parser!("Or statement rule {} didn't accept lexer input {:?}", stringify!($parse_funcs), lexer);
                 }
             )+;
 
-            debug_parser!("Or failed {:?}", result);
+            debug_parser!("Or statement fails");
             None
         }
     }
@@ -69,16 +44,16 @@ macro_rules! or {
 
 macro_rules! and {
     [($($parse_funcs: expr),+) => $nandler_func: expr] => {
-        |lexer: &mut lexer::Lexer| -> Option<Box<Expression>> {
+        |lexer: &mut lexer::Lexer| -> Option<Box<expression::Expression>> {
             let parser_pos = lexer.position();
 
             let results = ($(match $parse_funcs(lexer) {
                 Some(expression) => {
-                    debug_parser!("And accepted {:?}\n\twith lexer {:?}\n\tand func {:?}", expression, lexer, stringify!($parse_funcs));
+                    debug_parser!("And statement rule {} accepted expression {:?}. Lexer state {:?}", stringify!($parse_funcs), expression, lexer);
                     expression
                 }
                 _ => {
-                    debug_parser!("And didn't accept rule\n\twith lexer {:?}\n\tand func {:?}", lexer, stringify!($parse_funcs));
+                    debug_parser!("And statement rule {} didn't accept lexer input {:?}", stringify!($parse_funcs), lexer);
                     lexer.rollback(parser_pos);
                     return None
                 }
@@ -101,15 +76,15 @@ macro_rules! and {
 
 macro_rules! rule {
     ($name: ident, $parse_func:expr) => {
-        fn $name(lexer: &mut lexer::Lexer) -> Option<Box<Expression>> {
-            debug_parser!("Executing rule {:?}", stringify!($name));
+        fn $name(lexer: &mut lexer::Lexer) -> Option<Box<expression::Expression>> {
+            debug_parser!("Executing rule {}", stringify!($name));
 
             $parse_func(lexer)
         }
     };
 }
 
-fn num(lexer: &mut lexer::Lexer) -> Option<Box<Expression>> {
+fn num(lexer: &mut lexer::Lexer) -> Option<Box<expression::Expression>> {
     let parser_pos = lexer.position();
 
     let result = lexer
@@ -117,7 +92,7 @@ fn num(lexer: &mut lexer::Lexer) -> Option<Box<Expression>> {
         .map(|c| c as char)
         .and_then(|c| {
                   if c.is_numeric() {
-                      Some(Box::new(Expression::Number(c.to_string().parse::<f32>().unwrap())))
+                      Some(Box::new(expression::Expression::Number(c.to_string().parse::<f32>().unwrap())))
                   } else {
                       lexer.rollback(parser_pos);
                       None
@@ -126,7 +101,7 @@ fn num(lexer: &mut lexer::Lexer) -> Option<Box<Expression>> {
     result
 }
 
-fn token(token_char: char) -> impl FnMut(&mut lexer::Lexer) -> Option<Box<Expression>> {
+fn token(token_char: char) -> impl FnMut(&mut lexer::Lexer) -> Option<Box<expression::Expression>> {
     move |ref mut lexer| {
         let parser_pos = lexer.position();
 
@@ -134,7 +109,7 @@ fn token(token_char: char) -> impl FnMut(&mut lexer::Lexer) -> Option<Box<Expres
         .next()
         .map(|c| c as char).and_then(|c| 
             if c == token_char {
-                Some(Box::new(Expression::Token(c)))
+                Some(Box::new(expression::Expression::Token(c)))
             } else {
                 lexer.rollback(parser_pos);
                 None
@@ -142,16 +117,12 @@ fn token(token_char: char) -> impl FnMut(&mut lexer::Lexer) -> Option<Box<Expres
     }
 }
 
-fn make_operator(left: Box<Expression>, op: Box<Expression>, right: Box<Expression>) -> Option<Box<Expression>> {
-    Some(Box::new(Expression::Operator{
+fn make_operator(left: Box<expression::Expression>, op: Box<expression::Expression>, right: Box<expression::Expression>) -> Option<Box<expression::Expression>> {
+    Some(Box::new(expression::Expression::Operator{
         op,
         left,
         right
     }))
-}
-
-fn negate(_neg_token: Box<Expression>, number: Box<Expression>) -> Option<Box<Expression>> {
-    Some(Box::new(Expression::Negate(number)))
 }
 
 // expr = sum
@@ -180,7 +151,7 @@ rule!(atom, or![
     neg
 ]);
 
-rule!(neg, and![(token('-'), atom) => negate]);
+rule!(neg, and![(token('-'), atom) => |_, number| Some(Box::new(expression::Expression::Negate(number)))]);
 
 fn main() {
     let result0 = expr(&mut lexer::Lexer::new("1 + 2"));
