@@ -1,6 +1,6 @@
 [package]
-name = "ll"
-version = "0.1.0"
-authors = ["Alexander Smoktal <alexander.smoktal@comodo.com>"]
+name = "rust-macroparser"
+version = "1.0.0"
+authors = ["Alexander Smoktal <cosm.ua@gmail.com>"]
 
 [dependencies]
